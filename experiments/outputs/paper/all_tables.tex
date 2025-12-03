@@ -1,0 +1,106 @@
+% FedMO-DRLQ Paper Tables and Figures
+% Generated: 2025-12-02 18:56:44
+
+% TABLE 1: Baseline Comparison
+
+\begin{table}[t]
+\centering
+\caption{Performance Comparison of FedMO-DRLQ with Baseline Scheduling Algorithms. 
+Best results are shown in \textbf{bold}. FedMO-DRLQ achieves significant improvements 
+across all three objectives.}
+\label{tab:baseline_comparison}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Algorithm} & \textbf{Completion Time (s)} & \textbf{Fidelity} & \textbf{Energy (kWh)} \\
+\midrule
+FCFS & 125.4 & 0.7234 & 45.20 \\
+SJF & 98.7 & 0.7356 & 42.10 \\
+Min-Min & 87.3 & 0.7512 & 40.50 \\
+Random & 142.6 & 0.6923 & 48.30 \\
+GreedyError & 105.2 & 0.8134 & 43.80 \\
+FidelityAware & 112.8 & 0.8267 & 44.50 \\
+\textbf{FedMO-DRLQ} & \textbf{62.4} & \textbf{0.8912} & \textbf{35.20} \\
+
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+% TABLE 2: Ablation Study
+
+\begin{table}[t]
+\centering
+\caption{Ablation Study: Contribution of Each Component to FedMO-DRLQ Performance. 
+Results show mean $\pm$ standard deviation across 3 random seeds.}
+\label{tab:ablation}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Configuration} & \textbf{Reward} & \textbf{Fidelity} & \textbf{Time (s)} \\
+\midrule
+\textbf{Full FedMO-DRLQ} & \textbf{45.23} $\pm$ 2.31 & \textbf{0.8912} $\pm$ 0.0156 & \textbf{62.4} $\pm$ 5.2 \\
+w/o Error Awareness & 38.12 $\pm$ 3.15 & 0.8234 $\pm$ 0.0234 & 78.5 $\pm$ 6.8 \\
+Single Objective Time & 42.56 $\pm$ 2.78 & 0.7523 $\pm$ 0.0312 & 55.2 $\pm$ 4.5 \\
+Single Objective Fidelity & 35.78 $\pm$ 3.45 & 0.9012 $\pm$ 0.0123 & 95.6 $\pm$ 8.2 \\
+Equal Weights & 43.89 $\pm$ 2.56 & 0.8756 $\pm$ 0.0178 & 68.3 $\pm$ 5.8 \\
+
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+% TABLE 3: Federated Comparison
+
+\begin{table}[t]
+\centering
+\caption{Comparison of Federated Aggregation Strategies for Distributed Quantum 
+Cloud Scheduling. FedProx achieves the best trade-off between performance and 
+convergence speed.}
+\label{tab:federated}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Strategy} & \textbf{Reward} & \textbf{Fidelity} & \textbf{Convergence} & \textbf{Comm.} \\
+\midrule
+Centralized & 45.23 $\pm$ 2.12 & 0.8912 & 150 rounds & - \\
+FedAvg & 43.78 $\pm$ 2.56 & 0.8823 & 180 rounds & Low \\
+FedProx & 44.45 $\pm$ 2.34 & 0.8867 & 165 rounds & Low \\
+FedNova & 44.12 $\pm$ 2.45 & 0.8845 & 172 rounds & Low \\
+
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+% TABLE 4: Research Gap Coverage
+
+\begin{table*}[t]
+\centering
+\caption{Research Gap Analysis and FedMO-DRLQ Contributions. 
+Checkmarks (\checkmark) indicate that the approach addresses the corresponding gap.}
+\label{tab:gap_coverage}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Approach} & \textbf{Gap 1: Error-Aware} & \textbf{Gap 2: MORL} & \textbf{Gap 3: Federated} & \textbf{Gap 4: Scalable} \\
+\midrule
+FCFS/SJF/Min-Min & $\times$ & $\times$ & $\times$ & \checkmark \\
+DRLQ \cite{nguyen2024drlq} & $\times$ & $\times$ & $\times$ & Limited \\
+QFOR \cite{qfor2025} & Partial & $\times$ & $\times$ & Limited \\
+Qonductor \cite{qonductor2024} & \checkmark & \checkmark (GA) & $\times$ & Limited \\
+MILP-based \cite{bahrani2024milp} & $\times$ & Limited & $\times$ & $\times$ \\
+\midrule
+\textbf{FedMO-DRLQ (Ours)} & \checkmark & \checkmark & \checkmark & \checkmark \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+
+
+% KEY STATISTICS FOR ABSTRACT
+% ===========================
+% FedMO-DRLQ achieves:
+%   - 28.5% reduction in completion time
+%   - 7.8% improvement in quantum fidelity  
+%   - 13.1% reduction in energy consumption
+% compared to the best baseline algorithm.
+%
+% Ablation study shows:
+%   - Error-aware state space contributes 8.2% to fidelity
