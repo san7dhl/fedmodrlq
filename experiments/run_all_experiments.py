@@ -61,19 +61,46 @@ class ExperimentConfig:
 class HeuristicScheduler:
     """Heuristic scheduling algorithms for baseline comparison."""
     
-    def __init__(self, n_qnodes: int = 5, node_qubits: list = None):
+    def __init__(self, n_qnodes: int = 5):
         self.n_qnodes = n_qnodes
-        self.node_qubits = node_qubits or [127, 27, 27, 7, 7]  # Default IBM config
+        # IBM node capacities: washington(127), kolkata(27), hanoi(27), perth(7), lagos(7)
+        self.node_qubits = [127, 27, 27, 7, 7][:n_qnodes]
         self.rr_index = 0
     
     def reset(self):
         self.rr_index = 0
     
+    def _get_task_qubits(self, state: np.ndarray) -> int:
+        """Extract task qubit requirement from state (denormalize)."""
+        # state[1] is qubit_number / 127.0
+        return max(1, int(state[1] * 127))
+    
     def _get_valid_nodes(self, state: np.ndarray) -> list:
-        """Get nodes that can handle current task (have enough qubits)."""
-        task_qubits = int(state[1] * 127)  # Denormalize (normalized by /127)
+        """Get nodes that can handle current task."""
+        task_qubits = self._get_task_qubits(state)
         valid = [i for i, q in enumerate(self.node_qubits) if q >= task_qubits]
-        return valid if valid else list(range(self.n_qnodes))  # Fallback to all
+        # If no valid nodes, return node with most qubits (best effort)
+        if not valid:
+            return [0]  # washington has 127 qubits
+        return valid
+    
+    def _get_node_times(self, state: np.ndarray) -> list:
+        """Extract next available times for all nodes."""
+        per_node_dim = (len(state) - 4) // self.n_qnodes
+        times = []
+        for i in range(self.n_qnodes):
+            start_idx = 4 + i * per_node_dim
+            times.append(state[start_idx + per_node_dim - 1])
+        return times
+    
+    def _get_node_errors(self, state: np.ndarray) -> list:
+        """Extract error rates for all nodes."""
+        per_node_dim = (len(state) - 4) // self.n_qnodes
+        errors = []
+        for i in range(self.n_qnodes):
+            start_idx = 4 + i * per_node_dim
+            errors.append(state[start_idx])
+        return errors
     
     def random(self, state: np.ndarray) -> int:
         """Random scheduling among valid nodes."""
@@ -83,7 +110,7 @@ class HeuristicScheduler:
     def round_robin(self, state: np.ndarray) -> int:
         """Round-robin among valid nodes."""
         valid = self._get_valid_nodes(state)
-        # Find next valid node from current position
+        # Find next valid node
         for _ in range(self.n_qnodes):
             if self.rr_index in valid:
                 action = self.rr_index
@@ -93,47 +120,38 @@ class HeuristicScheduler:
         return valid[0]
     
     def min_completion_time(self, state: np.ndarray) -> int:
-        """MCT among VALID nodes only."""
+        """MCT: Pick valid node with minimum next available time."""
         valid = self._get_valid_nodes(state)
-        per_node_dim = (len(state) - 4) // self.n_qnodes
+        times = self._get_node_times(state)
         
         best_node = valid[0]
         best_time = float('inf')
-        
         for i in valid:
-            start_idx = 4 + i * per_node_dim
-            next_avail = state[start_idx + per_node_dim - 1]
-            if next_avail < best_time:
-                best_time = next_avail
+            if times[i] < best_time:
+                best_time = times[i]
                 best_node = i
-        
         return best_node
     
     def min_error(self, state: np.ndarray) -> int:
-        """Min-Error among valid nodes."""
+        """Pick valid node with minimum error rate."""
         valid = self._get_valid_nodes(state)
-        per_node_dim = (len(state) - 4) // self.n_qnodes
+        errors = self._get_node_errors(state)
         
         best_node = valid[0]
         best_error = float('inf')
-        
         for i in valid:
-            start_idx = 4 + i * per_node_dim
-            error = state[start_idx]  # First feature is epsilon_2q
-            if error < best_error:
-                best_error = error
+            if errors[i] < best_error:
+                best_error = errors[i]
                 best_node = i
-        
         return best_node
     
     def best_fidelity(self, state: np.ndarray) -> int:
-        """Best-Fidelity among valid nodes."""
+        """Pick valid node with best fidelity score (high T2, low error)."""
         valid = self._get_valid_nodes(state)
         per_node_dim = (len(state) - 4) // self.n_qnodes
         
         best_node = valid[0]
         best_score = -float('inf')
-        
         for i in valid:
             start_idx = 4 + i * per_node_dim
             error = state[start_idx]
@@ -142,7 +160,6 @@ class HeuristicScheduler:
             if score > best_score:
                 best_score = score
                 best_node = i
-        
         return best_node
 
 def run_heuristic_evaluation(
@@ -150,24 +167,30 @@ def run_heuristic_evaluation(
     scheduler: HeuristicScheduler,
     policy_name: str,
     policy_fn,
-    n_episodes: int
+    n_episodes: int,
+    max_steps_per_episode: int = 200  # ADD THIS PARAMETER
 ) -> pd.DataFrame:
-    """Run evaluation for a heuristic policy"""
+    """Run evaluation for a heuristic policy with step limit to prevent infinite loops."""
     results = []
+    
     for ep in range(n_episodes):
         scheduler.reset()
         obs, _ = env.reset()
         done = False
+        steps = 0
         
-        while not done:
+        while not done and steps < max_steps_per_episode:
             action = policy_fn(obs)
             obs, reward, done, truncated, info = env.step(action)
+            steps += 1
             if truncated:
                 done = True
-                
+        
         summary = env.get_episode_summary()
         summary['episode'] = ep
         summary['policy'] = policy_name
+        summary['steps'] = steps
+        summary['completed'] = done
         results.append(summary)
         
     return pd.DataFrame(results)
