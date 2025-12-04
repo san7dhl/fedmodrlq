@@ -60,57 +60,90 @@ class ExperimentConfig:
 
 class HeuristicScheduler:
     """Heuristic scheduling algorithms for baseline comparison."""
-    def __init__(self, n_qnodes: int = 5):
+    
+    def __init__(self, n_qnodes: int = 5, node_qubits: list = None):
         self.n_qnodes = n_qnodes
+        self.node_qubits = node_qubits or [127, 27, 27, 7, 7]  # Default IBM config
         self.rr_index = 0
-
+    
     def reset(self):
         self.rr_index = 0
-
+    
+    def _get_valid_nodes(self, state: np.ndarray) -> list:
+        """Get nodes that can handle current task (have enough qubits)."""
+        task_qubits = int(state[1] * 127)  # Denormalize (normalized by /127)
+        valid = [i for i, q in enumerate(self.node_qubits) if q >= task_qubits]
+        return valid if valid else list(range(self.n_qnodes))  # Fallback to all
+    
     def random(self, state: np.ndarray) -> int:
-        """Random scheduling"""
-        return np.random.randint(0, self.n_qnodes)
-
+        """Random scheduling among valid nodes."""
+        valid = self._get_valid_nodes(state)
+        return np.random.choice(valid)
+    
     def round_robin(self, state: np.ndarray) -> int:
-        """Round-robin scheduling"""
-        action = self.rr_index
-        self.rr_index = (self.rr_index + 1) % self.n_qnodes
-        return action
-
+        """Round-robin among valid nodes."""
+        valid = self._get_valid_nodes(state)
+        # Find next valid node from current position
+        for _ in range(self.n_qnodes):
+            if self.rr_index in valid:
+                action = self.rr_index
+                self.rr_index = (self.rr_index + 1) % self.n_qnodes
+                return action
+            self.rr_index = (self.rr_index + 1) % self.n_qnodes
+        return valid[0]
+    
     def min_completion_time(self, state: np.ndarray) -> int:
-        """Min-Completion-Time (MCT) selects node with minimum next available time."""
-        # Extract node next available times from state
-        # State format: [task_features(4)] + [node_features(X) * n_qnodes]
-        # We assume the last feature of a node vector is next_available_time (based on FedMOEnv logic)
+        """MCT among VALID nodes only."""
+        valid = self._get_valid_nodes(state)
         per_node_dim = (len(state) - 4) // self.n_qnodes
-        node_times = []
-        for i in range(self.n_qnodes):
+        
+        best_node = valid[0]
+        best_time = float('inf')
+        
+        for i in valid:
             start_idx = 4 + i * per_node_dim
-            next_avail = state[start_idx + per_node_dim - 1] 
-            node_times.append(next_avail)
-        return int(np.argmin(node_times))
-
+            next_avail = state[start_idx + per_node_dim - 1]
+            if next_avail < best_time:
+                best_time = next_avail
+                best_node = i
+        
+        return best_node
+    
     def min_error(self, state: np.ndarray) -> int:
-        """Min-Error selects node with minimum two-qubit error rate."""
+        """Min-Error among valid nodes."""
+        valid = self._get_valid_nodes(state)
         per_node_dim = (len(state) - 4) // self.n_qnodes
-        node_errors = []
-        for i in range(self.n_qnodes):
+        
+        best_node = valid[0]
+        best_error = float('inf')
+        
+        for i in valid:
             start_idx = 4 + i * per_node_dim
-            error = state[start_idx] # First feature is epsilon_2q
-            node_errors.append(error)
-        return int(np.argmin(node_errors))
-
+            error = state[start_idx]  # First feature is epsilon_2q
+            if error < best_error:
+                best_error = error
+                best_node = i
+        
+        return best_node
+    
     def best_fidelity(self, state: np.ndarray) -> int:
-        """Best-Fidelity combines low error and high T2."""
+        """Best-Fidelity among valid nodes."""
+        valid = self._get_valid_nodes(state)
         per_node_dim = (len(state) - 4) // self.n_qnodes
-        node_scores = []
-        for i in range(self.n_qnodes):
+        
+        best_node = valid[0]
+        best_score = -float('inf')
+        
+        for i in valid:
             start_idx = 4 + i * per_node_dim
             error = state[start_idx]
             t2 = state[start_idx + 1]
-            score = t2 / (error + 1e-6) # Simple score combining both
-            node_scores.append(score)
-        return int(np.argmax(node_scores))
+            score = t2 / (error + 1e-6)
+            if score > best_score:
+                best_score = score
+                best_node = i
+        
+        return best_node
 
 def run_heuristic_evaluation(
     env: FedMOEnv,
