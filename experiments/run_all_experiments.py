@@ -200,9 +200,10 @@ def run_drl_training(
     agent: RainbowDQNAgent,
     n_episodes: int,
     eval_interval: int = 10,
-    verbose: bool = True
+    verbose: bool = True,
+    max_steps_per_episode: int = 200  # ADD: Step limit to prevent infinite loops
 ) -> Tuple[List[Dict], RainbowDQNAgent]:
-    """Train DRL agent"""
+    """Train DRL agent with step limit to prevent infinite loops."""
     training_history = []
     
     for ep in range(n_episodes):
@@ -211,7 +212,7 @@ def run_drl_training(
         ep_reward = 0
         ep_steps = 0
         
-        while not done:
+        while not done and ep_steps < max_steps_per_episode:
             action = agent.select_action(obs, training=True)
             next_obs, reward, done, truncated, info = env.step(action)
             
@@ -229,7 +230,19 @@ def run_drl_training(
                 done = True
                 
         summary = env.get_episode_summary()
+        # Provide defaults if summary is empty (no tasks completed before step limit)
+        if not summary:
+            summary = {
+                'total_reward': ep_reward,
+                'mean_reward': ep_reward / max(ep_steps, 1),
+                'mean_fidelity': 0.0,
+                'mean_completion_time': 0.0,
+                'total_energy': 0.0,
+                'n_tasks': 0,
+                'pareto_front_size': 0
+            }
         summary['episode'] = ep
+        summary['steps'] = ep_steps
         summary['training_loss'] = agent.losses[-1] if hasattr(agent, 'losses') and agent.losses else 0
         training_history.append(summary)
         
@@ -404,8 +417,8 @@ def run_experiments(config: ExperimentConfig):
             h['scalarization'] = name
             mo_results.append(h)
             
-        mean_fidelity = np.mean([h['mean_fidelity'] for h in history[-20:]])
-        mean_time = np.mean([h['mean_completion_time'] for h in history[-20:]])
+        mean_fidelity = np.mean([h.get('mean_fidelity', 0) for h in history[-20:]]) if history else 0
+        mean_time = np.mean([h.get('mean_completion_time', 0) for h in history[-20:]]) if history else 0
         print(f"  Final Mean Fidelity: {mean_fidelity:.4f}")
         print(f"  Final Mean Completion Time: {mean_time:.2f}s")
         
