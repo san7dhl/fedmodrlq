@@ -13,8 +13,13 @@ from datetime import datetime
 from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass, asdict
 import warnings
+import torch
 
 warnings.filterwarnings('ignore')
+
+# Auto-detect device (use GPU if available)
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+print(f"[Device] Using: {DEVICE}")
 
 # Add fedmo_package to path
 # Assuming this script is in experiments/ and fedmo_package is in the root
@@ -353,7 +358,7 @@ def run_experiments(config: ExperimentConfig):
         state_dim=env_drl.observation_space.shape[0],
         action_dim=config.n_qnodes,
         config=rainbow_config,
-        device="cpu"
+        device=DEVICE
     )
     
     print("\nTraining Rainbow DQN with error-aware features...")
@@ -405,7 +410,7 @@ def run_experiments(config: ExperimentConfig):
             state_dim=env_mo.observation_space.shape[0],
             action_dim=config.n_qnodes,
             config=rainbow_config,
-            device="cpu"
+            device=DEVICE
         )
         
         history, _ = run_drl_training(
@@ -445,7 +450,7 @@ def run_experiments(config: ExperimentConfig):
         state_dim=env_no_error.observation_space.shape[0],
         action_dim=config.n_qnodes,
         config=rainbow_config,
-        device="cpu"
+        device=DEVICE
     )
     
     history_no_error, _ = run_drl_training(
@@ -489,7 +494,7 @@ def run_experiments(config: ExperimentConfig):
         aggregator = FederatedAggregator(
             config=fed_config,
             n_clients=config.n_datacenters,
-            device="cpu"
+            device=DEVICE
         )
         
         # Create agents for each datacenter
@@ -510,7 +515,7 @@ def run_experiments(config: ExperimentConfig):
                 state_dim=env_dc.observation_space.shape[0],
                 action_dim=config.n_qnodes,
                 config=rainbow_config,
-                device="cpu"
+                device=DEVICE
             )
             agents.append(agent_dc)
             
@@ -563,7 +568,7 @@ def run_experiments(config: ExperimentConfig):
                 state_dim=envs[0].observation_space.shape[0],
                 action_dim=config.n_qnodes,
                 config=rainbow_config,
-                device="cpu"
+                device=DEVICE
             )
             eval_agent.set_parameters(global_params)
             
