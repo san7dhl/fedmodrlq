@@ -1,0 +1,3 @@
+This repository contains the implementation of FedMO-DRLQ, a proposed solution to the limitations of existing quantum cloud schedulers. Current approaches often ignore the stochastic errors of Noisy Intermediate-Scale Quantum (NISQ) devices and rely on centralized architectures that pose privacy risks.
+
+FedMO-DRLQ introduces an error-aware state representation and a multi-objective reward function  to navigate the trade-offs between execution speed and computational fidelity. It employs a Federated Learning architecture to ensure scalability and data privacy across distributed quantum datacenters. Extensive benchmarking against heuristics (FCFS, SJF, Min-Min) demonstrates the framework's ability to discover Pareto-optimal scheduling policies.

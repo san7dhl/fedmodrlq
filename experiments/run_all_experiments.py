@@ -35,24 +35,6 @@ from fedmo_drlq.federated.federated_learning import (
 # CRITICAL FIX: Import the real environment instead of defining SimplifiedEnv
 from fedmo_drlq.envs.fedmo_env import FedMOEnv
 
-def safe_get_summary(env) -> dict:
-    """Get episode summary with default values for missing keys."""
-    summary = env.get_episode_summary()
-    if not summary:
-        summary = {}
-    defaults = {
-        'total_reward': 0.0,
-        'mean_reward': 0.0,
-        'mean_fidelity': 0.0,
-        'mean_completion_time': 0.0,
-        'total_energy': 0.0,
-        'n_tasks': 0,
-        'pareto_front_size': 0
-    }
-    for key, default in defaults.items():
-        summary.setdefault(key, default)
-    return summary
-
 @dataclass
 class ExperimentConfig:
     """Configuration for experiments"""
@@ -204,7 +186,7 @@ def run_heuristic_evaluation(
             if truncated:
                 done = True
         
-        summary = safe_get_summary(env)
+        summary = env.get_episode_summary()
         summary['episode'] = ep
         summary['policy'] = policy_name
         summary['steps'] = steps
@@ -246,7 +228,7 @@ def run_drl_training(
             if truncated: 
                 done = True
                 
-        summary = safe_get_summary(env)
+        summary = env.get_episode_summary()
         summary['episode'] = ep
         summary['training_loss'] = agent.losses[-1] if hasattr(agent, 'losses') and agent.losses else 0
         training_history.append(summary)
@@ -530,7 +512,6 @@ def run_experiments(config: ExperimentConfig):
         round_metrics = []
         
         for fed_round in range(config.federated_rounds):
-            print(f"    Round {fed_round+1}/{config.federated_rounds}...", end=" ", flush=True)
             # Local training on each datacenter
             for dc_id in range(config.n_datacenters):
                 env = envs[dc_id]
@@ -544,15 +525,12 @@ def run_experiments(config: ExperimentConfig):
                 for _ in range(config.local_steps):
                     obs, _ = env.reset()
                     done = False
-                    steps = 0
-                    max_steps = 200  # Prevent infinite loops
-                    while not done and steps < max_steps:
+                    while not done:
                         action = agent.select_action(obs, training=True)
                         next_obs, reward, done, truncated, info = env.step(action)
                         agent.store_transition(obs, action, reward, next_obs, done)
                         agent.update()
                         obs = next_obs
-                        steps += 1
                         if truncated: done = True
                         
                 # Submit update
@@ -579,18 +557,15 @@ def run_experiments(config: ExperimentConfig):
             # Quick eval
             obs, _ = envs[0].reset()
             done = False
-            eval_steps = 0
-            while not done and eval_steps < 200:
+            while not done:
                 action = eval_agent.select_action(obs, training=False)
                 obs, _, done, truncated, _ = envs[0].step(action)
-                eval_steps += 1
                 if truncated: done = True
                 
             summary = envs[0].get_episode_summary()
             summary['fed_round'] = fed_round
             summary['method'] = name
             round_metrics.append(summary)
-            print(f"Fidelity={summary.get('mean_fidelity', 0):.4f}")
             
             if (fed_round + 1) % 5 == 0:
                 print(f"  Round {fed_round+1}: Fidelity={summary.get('mean_fidelity', 0):.4f}, "
