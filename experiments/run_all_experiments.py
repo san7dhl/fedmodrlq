@@ -543,12 +543,15 @@ def run_experiments(config: ExperimentConfig):
                 for _ in range(config.local_steps):
                     obs, _ = env.reset()
                     done = False
-                    while not done:
+                    step_count = 0
+                    max_steps = 200  # Prevent infinite loops
+                    while not done and step_count < max_steps:
                         action = agent.select_action(obs, training=True)
                         next_obs, reward, done, truncated, info = env.step(action)
                         agent.store_transition(obs, action, reward, next_obs, done)
                         agent.update()
                         obs = next_obs
+                        step_count += 1
                         if truncated: done = True
                         
                 # Submit update
@@ -575,9 +578,12 @@ def run_experiments(config: ExperimentConfig):
             # Quick eval
             obs, _ = envs[0].reset()
             done = False
-            while not done:
+            eval_steps = 0
+            max_eval_steps = 200  # Prevent infinite loops
+            while not done and eval_steps < max_eval_steps:
                 action = eval_agent.select_action(obs, training=False)
                 obs, _, done, truncated, _ = envs[0].step(action)
+                eval_steps += 1
                 if truncated: done = True
                 
             summary = envs[0].get_episode_summary()

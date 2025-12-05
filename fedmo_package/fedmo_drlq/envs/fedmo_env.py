@@ -364,29 +364,52 @@ class FedMOEnv(gym.Env):
         
         # Check if task can execute on node
         if not self._can_execute_on_node(task, node):
-            # Reschedule task
             task.rescheduling_count += 1
-            task.arrival_time += 1.0
             
-            # Re-insert into queue
-            idx = 0
-            while idx < len(self.qtask_queue) and self.qtask_queue[idx].arrival_time < task.arrival_time:
-                idx += 1
-            self.qtask_queue.insert(idx, task)
-            
-            # Penalty reward
-            reward = -0.1
-            
-            # Get next task
-            if self.qtask_queue:
-                self.current_qtask = self.qtask_queue.pop(0)
+            # After 3 rescheduling attempts, auto-correct to best valid node
+            # This prevents infinite loops and focuses training on scheduling optimization
+            if task.rescheduling_count >= 3:
+                valid_nodes = [n for n in self.qnodes if self._can_execute_on_node(task, n)]
+                if valid_nodes:
+                    # Pick valid node with earliest availability (MCT heuristic)
+                    node = min(valid_nodes, key=lambda n: n.next_available_time)
+                    action = node.id
+                    # Small penalty for needing auto-correction
+                    auto_correct_penalty = -0.05
+                else:
+                    # No valid nodes at all - skip this task
+                    if self.qtask_queue:
+                        self.current_qtask = self.qtask_queue.pop(0)
+                    else:
+                        self.current_qtask = None
+                    obs = self._get_obs()
+                    terminated = self.current_qtask is None
+                    return obs, -0.5, terminated, False, {"skipped": True, "reason": "no_valid_node"}
             else:
-                self.current_qtask = None
-            
-            obs = self._get_obs()
-            terminated = self.current_qtask is None
-            
-            return obs, reward, terminated, False, {"rescheduled": True}
+                # Normal rescheduling for first few attempts
+                task.arrival_time += 1.0
+                
+                # Re-insert into queue
+                idx = 0
+                while idx < len(self.qtask_queue) and self.qtask_queue[idx].arrival_time < task.arrival_time:
+                    idx += 1
+                self.qtask_queue.insert(idx, task)
+                
+                # Penalty reward
+                reward = -0.1
+                
+                # Get next task
+                if self.qtask_queue:
+                    self.current_qtask = self.qtask_queue.pop(0)
+                else:
+                    self.current_qtask = None
+                
+                obs = self._get_obs()
+                terminated = self.current_qtask is None
+                
+                return obs, reward, terminated, False, {"rescheduled": True}
+        else:
+            auto_correct_penalty = 0.0
         
         # Compute execution metrics
         waiting_time, execution_time, fidelity, energy = self._compute_execution_metrics(task, node)
@@ -416,7 +439,7 @@ class FedMOEnv(gym.Env):
             completion_time=completion_time,
             fidelity=fidelity,
             energy=energy
-        )
+        ) + auto_correct_penalty  # Add penalty if auto-correction was needed
         
         # Store metrics
         self.episode_rewards.append(reward)
