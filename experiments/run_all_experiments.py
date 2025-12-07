@@ -355,20 +355,29 @@ def run_experiments(config: ExperimentConfig):
     )
     
     rainbow_config = RainbowConfig(
-        lr=0.0001,
+        # FAST CONVERGENCE CONFIG - 3-5x faster training
+        hidden_dim=128,           # FAST: Smaller network
+        lr=0.0003,                # FAST: Higher LR
+        lr_decay=0.9995,          # FAST: Faster decay
+        lr_min=0.00005,           # FAST: Higher minimum
         gamma=0.99,
-        batch_size=256,           # GPU OPTIMIZED: 4x larger for GPU efficiency
-        buffer_size=100000,       # GPU OPTIMIZED: 2x larger buffer
-        min_buffer_size=1000,     # GPU OPTIMIZED: Start learning earlier with big batches
-        target_update_freq=1000,  # GPU OPTIMIZED: Less frequent sync
-        use_double_dqn=True,
-        use_prioritized_replay=True,
-        use_dueling=True,
+        batch_size=256,           # GPU: Larger batches
+        buffer_size=100000,       # GPU: Large buffer
+        min_buffer_size=2000,     # FAST: Start learning earlier
+        target_update_freq=500,   # FAST: More frequent (for hard update fallback)
+        use_soft_update=True,     # FAST: Polyak averaging
+        tau=0.005,                # FAST: Soft update rate
+        use_double_dqn=True,      # KEEP: Essential for stability
+        use_prioritized_replay=True,   # KEEP: Helps sparse rewards
+        use_dueling=True,         # KEEP: Better value estimation
         use_multistep=True,
-        n_step=3,
-        use_distributional=True,
-        num_atoms=51,
-        use_noisy_nets=True
+        n_step=3,                 # FAST: Shorter horizon
+        use_distributional=False, # FAST: Disabled for speed
+        use_noisy_nets=False,     # FAST: Use epsilon-greedy instead
+        use_hybrid_exploration=False,  # FAST: Disabled
+        epsilon_start=1.0,
+        epsilon_end=0.01,
+        epsilon_decay=30000       # FAST: Faster exploration decay
     )
     
     agent = RainbowDQNAgent(

@@ -28,64 +28,66 @@ import random
 class RainbowConfig:
     """Configuration for Rainbow DQN
     
-    UPDATED: Research-backed optimizations for multi-objective quantum scheduling.
-    Includes LR scheduling, hybrid exploration, and corrected reward bounds.
+    FAST CONVERGENCE: Optimized for 3-5x faster training.
+    Prioritizes speed over maximum performance.
     """
     
-    # Network architecture
-    hidden_dim: int = 256
+    # Network architecture - smaller for faster training
+    hidden_dim: int = 128  # FAST: Was 256
     
-    # Learning - with learning rate scheduling
-    lr: float = 0.0001  # Start higher to escape flat regions
-    lr_decay: float = 0.9999  # Decay per episode
-    lr_min: float = 0.00001  # Don't go below this
-    gamma: float = 0.99  # Appropriate for episodic scheduling
-    batch_size: int = 128  # Smaller for more frequent updates initially
+    # Learning - faster learning rate with aggressive decay
+    lr: float = 0.0003  # FAST: Was 0.0001
+    lr_decay: float = 0.9995  # FAST: Was 0.9999
+    lr_min: float = 0.00005  # FAST: Was 0.00001
+    gamma: float = 0.99
+    batch_size: int = 256  # FAST: Was 128, larger for GPU efficiency
     
-    # Replay buffer
-    buffer_size: int = 200000
-    min_buffer_size: int = 5000  # Better warmup before training
+    # Replay buffer - faster warmup
+    buffer_size: int = 100000  # Reduced from 200000
+    min_buffer_size: int = 2000  # FAST: Was 5000, start learning earlier
     
-    # Target network
-    target_update_freq: int = 2000  # Prevents Q-value oscillation
+    # Target network - can use soft or hard updates
+    target_update_freq: int = 500  # FAST: Was 2000
+    use_soft_update: bool = True  # FAST: NEW - Polyak averaging
+    tau: float = 0.005  # FAST: NEW - soft update rate
     
-    # Double DQN
+    # Double DQN - KEEP (essential for stability)
     use_double_dqn: bool = True
     
-    # Prioritized replay
+    # Prioritized replay - KEEP (helps with sparse rewards)
     use_prioritized_replay: bool = True
-    alpha: float = 0.6  # Prioritization exponent
-    beta_start: float = 0.4  # Importance sampling correction
+    alpha: float = 0.6
+    beta_start: float = 0.4
     beta_end: float = 1.0
-    beta_frames: int = 100000
+    beta_frames: int = 50000  # FAST: Was 100000
     
-    # Dueling
+    # Dueling - KEEP (helps value estimation)
     use_dueling: bool = True
     
-    # Multi-step
+    # Multi-step - shorter for faster credit assignment
     use_multistep: bool = True
-    n_step: int = 5  # Longer horizon for sparse rewards
+    n_step: int = 3  # FAST: Was 5
     
-    # Distributional - adjusted for new reward range (0.15 to 1.5)
-    use_distributional: bool = True
+    # Distributional - DISABLED for speed
+    use_distributional: bool = False  # FAST: Was True
     num_atoms: int = 51
-    v_min: float = -2.0  # Adjusted for actual reward range
-    v_max: float = 3.0   # Adjusted for actual reward range
+    v_min: float = -2.0
+    v_max: float = 3.0
     
-    # Noisy nets
-    use_noisy_nets: bool = True
+    # Noisy nets - DISABLED, use epsilon-greedy instead
+    use_noisy_nets: bool = False  # FAST: Was True
     noisy_std: float = 0.5
     
-    # Hybrid exploration: epsilon-greedy ON TOP of noisy nets for early exploration
-    use_hybrid_exploration: bool = True  # NEW: Use both epsilon and noisy
-    epsilon_hybrid_start: float = 0.3  # Start with 30% random (combined with noisy)
-    epsilon_hybrid_end: float = 0.01  # Decay to 1% 
-    epsilon_hybrid_decay_episodes: int = 5000  # Decay over 5000 episodes
+    # Hybrid exploration - DISABLED for simplicity
+    use_hybrid_exploration: bool = False  # FAST: Was True
+    epsilon_hybrid_start: float = 0.3
+    epsilon_hybrid_end: float = 0.01
+    epsilon_hybrid_decay_episodes: int = 5000
     
-    # Legacy epsilon (if noisy nets disabled)
+    # Standard epsilon-greedy - FAST DECAY
     epsilon_start: float = 1.0
     epsilon_end: float = 0.01
-    epsilon_decay: int = 150000
+    epsilon_decay: int = 30000  # FAST: Was 150000
     
     # Gradient clipping
     max_grad_norm: float = 10.0
@@ -363,8 +365,13 @@ class RainbowDQNAgent:
         state_dim: int,
         action_dim: int,
         config: Optional[RainbowConfig] = None,
-        device: str = "cpu"
+        device: str = "cuda"  # FAST: Default to GPU
     ):
+        # GPU availability check
+        if device == "cuda" and not torch.cuda.is_available():
+            print("WARNING: CUDA not available, falling back to CPU")
+            device = "cpu"
+        
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.config = config or RainbowConfig()
@@ -400,6 +407,17 @@ class RainbowDQNAgent:
         # Metrics
         self.losses = []
         self.q_values = []
+    
+    def _soft_update_target(self):
+        """Polyak averaging for smoother target network updates (FAST CONVERGENCE)."""
+        tau = self.config.tau
+        for target_param, online_param in zip(
+            self.target_net.parameters(),
+            self.online_net.parameters()
+        ):
+            target_param.data.copy_(
+                tau * online_param.data + (1.0 - tau) * target_param.data
+            )
     
     def update_learning_rate(self):
         """Decay learning rate after each episode."""
@@ -523,11 +541,13 @@ class RainbowDQNAgent:
         
         # Update priorities
         if self.config.use_prioritized_replay:
-            priorities = td_errors.abs().cpu().numpy() + 1e-6
+            priorities = td_errors.detach().abs().cpu().numpy() + 1e-6
             self.replay_buffer.update_priorities(indices, priorities)
         
-        # Update target network
-        if self.frame % self.config.target_update_freq == 0:
+        # Update target network (soft or hard)
+        if getattr(self.config, 'use_soft_update', False):
+            self._soft_update_target()
+        elif self.frame % self.config.target_update_freq == 0:
             self.target_net.load_state_dict(self.online_net.state_dict())
         
         # Reset noise
