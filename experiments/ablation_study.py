@@ -23,7 +23,7 @@ from fedmo_drlq import (
 OUTPUT_DIR = "outputs/ablation"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-NUM_EPISODES = 100
+NUM_EPISODES = 10000  # CRITICAL: Rainbow DQN needs 10k+ for convergence
 NUM_SEEDS = 3  # Run each config with 3 random seeds
 
 # Ablation configurations
@@ -32,13 +32,13 @@ ABLATION_CONFIGS = {
         "description": "Full FedMO-DRLQ (all components)",
         "error_aware": True,
         "multi_objective": True,
-        "weights": (0.4, 0.4, 0.2)
+        "weights": (0.25, 0.6, 0.15)  # UPDATED: Fidelity-focused
     },
     "no_error_awareness": {
         "description": "Without error-aware state (Gap 1 disabled)",
         "error_aware": False,
         "multi_objective": True,
-        "weights": (0.4, 0.4, 0.2)
+        "weights": (0.25, 0.6, 0.15)  # UPDATED: Fidelity-focused
     },
     "single_objective_time": {
         "description": "Single objective: time only (Gap 2 disabled)",
@@ -110,6 +110,12 @@ def run_experiment(config_name, config_params, seed):
         rewards.append(episode_reward)
         fidelities.append(summary.get('avg_fidelity', 0))
         completion_times.append(summary.get('total_completion_time', 0))
+        
+        # CRITICAL: Update learning rate and exploration decay each episode
+        if hasattr(agent, 'update_learning_rate'):
+            agent.update_learning_rate()
+        if hasattr(agent, 'update_epsilon'):
+            agent.update_epsilon()
     
     return {
         "final_reward": np.mean(rewards[-10:]),

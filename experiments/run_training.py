@@ -22,15 +22,16 @@ from fedmo_drlq import (
 # ============================================================
 
 # Training parameters
-NUM_EPISODES = 200
+NUM_EPISODES = 10000  # CRITICAL: Rainbow DQN needs 10k+ for convergence
 MAX_STEPS_PER_EPISODE = 100
 LOG_INTERVAL = 10
 SAVE_INTERVAL = 50
 
 # Multi-objective weights (must sum to 1.0)
-WEIGHT_TIME = 0.4       # Completion time importance
-WEIGHT_FIDELITY = 0.4   # Quantum fidelity importance  
-WEIGHT_ENERGY = 0.2     # Energy consumption importance
+# UPDATED: Prioritize fidelity for better DRL learning signal
+WEIGHT_TIME = 0.25       # Completion time importance
+WEIGHT_FIDELITY = 0.6    # Quantum fidelity importance (INCREASED)
+WEIGHT_ENERGY = 0.15     # Energy consumption importance
 
 # Scalarization method: WEIGHTED_SUM, CHEBYSHEV, or CONSTRAINT_BASED
 SCALARIZATION = ScalarizationMethod.WEIGHTED_SUM
@@ -122,8 +123,9 @@ for episode in range(NUM_EPISODES):
     
     # Episode loop
     for step in range(MAX_STEPS_PER_EPISODE):
-        # Select action using agent
-        action = agent.select_action(obs, training=True)
+        # Get action mask and select action
+        action_mask = env.get_action_mask() if hasattr(env, 'get_action_mask') else None
+        action = agent.select_action(obs, training=True, action_mask=action_mask)
         
         # Execute action in environment
         next_obs, reward, done, truncated, info = env.step(action)
@@ -150,6 +152,12 @@ for episode in range(NUM_EPISODES):
     all_fidelities.append(summary.get('avg_fidelity', 0))
     all_completion_times.append(summary.get('total_completion_time', 0))
     all_energies.append(summary.get('total_energy', 0))
+    
+    # CRITICAL: Update learning rate and exploration decay each episode
+    if hasattr(agent, 'update_learning_rate'):
+        agent.update_learning_rate()
+    if hasattr(agent, 'update_epsilon'):
+        agent.update_epsilon()
     
     # Logging
     if (episode + 1) % LOG_INTERVAL == 0:

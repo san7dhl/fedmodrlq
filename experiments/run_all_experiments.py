@@ -34,6 +34,7 @@ from fedmo_drlq.core.multi_objective_reward import (
     MultiObjectiveReward, MultiObjectiveConfig, ScalarizationMethod
 )
 from fedmo_drlq.agents.rainbow_dqn import RainbowDQNAgent, RainbowConfig
+from fedmo_drlq.agents.ppo import PPOAgent, TrainingConfig as PPOConfig  # Added for PPO baseline
 from fedmo_drlq.federated.federated_learning import (
     FederatedAggregator, FederatedTrainer, FederatedConfig, AggregationMethod
 )
@@ -44,20 +45,24 @@ from fedmo_drlq.envs.fedmo_env import FedMOEnv
 class ExperimentConfig:
     """Configuration for experiments"""
     # Dataset
-    dataset_path: str
+    dataset_path: str = ""
     
     # Environment
     n_qnodes: int = 5
     n_qtasks_per_episode: int = 25
     
-    # Training
-    n_episodes: int = 200
-    n_eval_episodes: int = 50
+    # Training - INCREASED for proper Rainbow DQN convergence  
+    n_episodes: int = 50000  # Was 10000 - need 50k for publication-quality results
+    n_eval_episodes: int = 100
     
-    # Federated
+    # For quick testing (set via command line)
+    quick_mode: bool = False
+    n_episodes_quick: int = 5000
+    
+    # Federated - INCREASED for convergence
     n_datacenters: int = 3
-    federated_rounds: int = 20
-    local_steps: int = 10
+    federated_rounds: int = 50   # Was 20 - need more for convergence
+    local_steps: int = 20        # Was 10 - more local training per round
     
     # Output
     output_dir: str = "outputs"
@@ -218,14 +223,20 @@ def run_drl_training(
         ep_steps = 0
         
         while not done and ep_steps < max_steps_per_episode:
-            action = agent.select_action(obs, training=True)
+            # Get action mask to prevent invalid actions
+            action_mask = env.get_action_mask() if hasattr(env, 'get_action_mask') else None
+            action = agent.select_action(obs, training=True, action_mask=action_mask)
             next_obs, reward, done, truncated, info = env.step(action)
             
             # Merge done and truncated for training signal
             training_done = done or truncated
             
             agent.store_transition(obs, action, reward, next_obs, training_done)
-            loss = agent.update()
+            
+            # GPU OPTIMIZATION: Multiple gradient updates per step
+            if len(agent.replay_buffer) >= agent.config.min_buffer_size:
+                for _ in range(4):  # 4 updates per step for better GPU utilization
+                    agent.update()
             
             obs = next_obs
             ep_reward += reward
@@ -250,6 +261,12 @@ def run_drl_training(
         summary['steps'] = ep_steps
         summary['training_loss'] = agent.losses[-1] if hasattr(agent, 'losses') and agent.losses else 0
         training_history.append(summary)
+        
+        # CRITICAL: Update learning rate and exploration decay each episode
+        if hasattr(agent, 'update_learning_rate'):
+            agent.update_learning_rate()  # Decay LR from 0.0001 → 0.00001
+        if hasattr(agent, 'update_epsilon'):
+            agent.update_epsilon()  # Decay exploration from 0.3 → 0.01
         
         if verbose and (ep + 1) % eval_interval == 0:
             print(f"Episode {ep+1}/{n_episodes}: "
@@ -340,10 +357,10 @@ def run_experiments(config: ExperimentConfig):
     rainbow_config = RainbowConfig(
         lr=0.0001,
         gamma=0.99,
-        batch_size=64,
-        buffer_size=50000,
-        min_buffer_size=500,
-        target_update_freq=500,
+        batch_size=256,           # GPU OPTIMIZED: 4x larger for GPU efficiency
+        buffer_size=100000,       # GPU OPTIMIZED: 2x larger buffer
+        min_buffer_size=1000,     # GPU OPTIMIZED: Start learning earlier with big batches
+        target_update_freq=1000,  # GPU OPTIMIZED: Less frequent sync
         use_double_dqn=True,
         use_prioritized_replay=True,
         use_dueling=True,
@@ -361,10 +378,19 @@ def run_experiments(config: ExperimentConfig):
         device=DEVICE
     )
     
+    # GPU OPTIMIZATION: Compile model for faster execution (PyTorch 2.0+)
+    if hasattr(torch, 'compile') and DEVICE == 'cuda':
+        try:
+            agent.online_net = torch.compile(agent.online_net, mode='reduce-overhead')
+            agent.target_net = torch.compile(agent.target_net, mode='reduce-overhead')
+            print("[GPU] Models compiled with torch.compile")
+        except Exception as e:
+            print(f"[GPU] Compilation skipped: {e}")
+    
     print("\nTraining Rainbow DQN with error-aware features...")
     drl_history, trained_agent = run_drl_training(
         env_drl, agent, config.n_episodes, 
-        eval_interval=20, verbose=True
+        eval_interval=500, verbose=True  # GPU OPTIMIZED: Reduced logging
     )
     
     drl_df = pd.DataFrame(drl_history)
@@ -374,28 +400,214 @@ def run_experiments(config: ExperimentConfig):
     # Save trained agent
     trained_agent.save(os.path.join(output_dir, "rainbow_dqn_agent.pt"))
     
+    # ========== EXPERIMENT 2b: PPO Baseline ==========
+    print("\n" + "=" * 60)
+    print("EXPERIMENT 2b: PPO Baseline Training")
+    print("=" * 60)
+    
+    # Create PPO config
+    ppo_config = PPOConfig(
+        algorithm="ppo",
+        lr=0.0003,
+        gamma=0.99,
+        batch_size=64,
+        ppo_clip=0.2,
+        ppo_epochs=10,
+    )
+    
+    env_ppo = FedMOEnv(
+        dataset_path=config.dataset_path,
+        n_qnodes=config.n_qnodes,
+        n_qtasks_per_episode=config.n_qtasks_per_episode,
+        include_error_features=True,
+        seed=config.seed + 500
+    )
+    
+    ppo_agent = PPOAgent(
+        state_dim=env_ppo.observation_space.shape[0],
+        action_dim=config.n_qnodes,
+        config=ppo_config,
+        device=DEVICE
+    )
+    
+    print("\nTraining PPO baseline...")
+    
+    ppo_history = []
+    for ep in range(config.n_episodes):
+        obs, _ = env_ppo.reset()
+        done = False
+        truncated = False
+        ep_reward = 0
+        ep_steps = 0
+        max_steps = 200
+        
+        while not done and not truncated and ep_steps < max_steps:
+            action, log_prob, value = ppo_agent.select_action(obs, training=True)
+            
+            # Action masking
+            if hasattr(env_ppo, 'get_action_mask'):
+                mask = env_ppo.get_action_mask()
+                if mask is not None and not mask[action]:
+                    valid_actions = np.where(mask)[0]
+                    if len(valid_actions) > 0:
+                        action = np.random.choice(valid_actions)
+            
+            next_obs, reward, done, truncated, info = env_ppo.step(action)
+            ppo_agent.store_transition(obs, action, reward, value, log_prob, done or truncated)
+            obs = next_obs
+            ep_reward += reward
+            ep_steps += 1
+        
+        # Update PPO when buffer has enough samples
+        if len(ppo_agent.buffer) >= ppo_config.batch_size:
+            ppo_agent.update()
+        
+        summary = env_ppo.get_episode_summary()
+        summary['episode'] = ep
+        summary['episode_reward'] = ep_reward
+        ppo_history.append(summary)
+        
+        if (ep + 1) % 1000 == 0:
+            recent = [h.get('mean_reward', 0) for h in ppo_history[-100:]]
+            print(f"  Episode {ep+1}/{config.n_episodes}: Reward={np.mean(recent):.3f}")
+    
+    ppo_df = pd.DataFrame(ppo_history)
+    ppo_df['policy'] = 'PPO'
+    ppo_df.to_csv(os.path.join(output_dir, "ppo_results.csv"), index=False)
+    
+    ppo_final_fidelity = np.mean([h.get('mean_fidelity', 0) for h in ppo_history[-100:]])
+    ppo_final_time = np.mean([h.get('mean_completion_time', 0) for h in ppo_history[-100:]])
+    print(f"\nPPO Final: Fidelity={ppo_final_fidelity:.4f}, Time={ppo_final_time:.1f}s")
+    
+    # ========== EXPERIMENT 2c: Standard DQN Baseline ==========
+    print("\n" + "=" * 60)
+    print("EXPERIMENT 2c: Standard DQN Baseline Training")
+    print("=" * 60)
+    
+    # Standard DQN: Rainbow with all extensions DISABLED
+    standard_dqn_config = RainbowConfig(
+        lr=0.001,
+        gamma=0.99,
+        batch_size=64,
+        buffer_size=50000,
+        min_buffer_size=500,
+        target_update_freq=500,
+        use_double_dqn=True,  # Keep only Double DQN
+        use_prioritized_replay=False,
+        use_dueling=False,
+        use_multistep=False,
+        use_distributional=False,
+        use_noisy_nets=False,
+        use_hybrid_exploration=False,
+        epsilon_start=1.0,
+        epsilon_end=0.01,
+        epsilon_decay=100000
+    )
+    
+    env_dqn = FedMOEnv(
+        dataset_path=config.dataset_path,
+        n_qnodes=config.n_qnodes,
+        n_qtasks_per_episode=config.n_qtasks_per_episode,
+        include_error_features=True,
+        seed=config.seed + 1000
+    )
+    
+    dqn_agent = RainbowDQNAgent(
+        state_dim=env_dqn.observation_space.shape[0],
+        action_dim=config.n_qnodes,
+        config=standard_dqn_config,
+        device=DEVICE
+    )
+    
+    print("\nTraining Standard DQN baseline...")
+    dqn_history, _ = run_drl_training(
+        env_dqn, dqn_agent, config.n_episodes,
+        eval_interval=1000, verbose=False
+    )
+    
+    dqn_df = pd.DataFrame(dqn_history)
+    dqn_df['policy'] = 'StandardDQN'
+    dqn_df.to_csv(os.path.join(output_dir, "standard_dqn_results.csv"), index=False)
+    
+    dqn_final_fidelity = np.mean([h.get('mean_fidelity', 0) for h in dqn_history[-100:]])
+    dqn_final_time = np.mean([h.get('mean_completion_time', 0) for h in dqn_history[-100:]])
+    print(f"\nStandard DQN Final: Fidelity={dqn_final_fidelity:.4f}, Time={dqn_final_time:.1f}s")
+    
+    # ========== DRL COMPARISON SUMMARY ==========
+    print("\n" + "=" * 60)
+    print("DRL ALGORITHMS COMPARISON")
+    print("=" * 60)
+    
+    rainbow_final_fidelity = np.mean([h.get('mean_fidelity', 0) for h in drl_history[-100:]])
+    rainbow_final_time = np.mean([h.get('mean_completion_time', 0) for h in drl_history[-100:]])
+    rainbow_final_reward = np.mean([h.get('mean_reward', 0) for h in drl_history[-100:]])
+    ppo_final_reward = np.mean([h.get('mean_reward', 0) for h in ppo_history[-100:]])
+    dqn_final_reward = np.mean([h.get('mean_reward', 0) for h in dqn_history[-100:]])
+    
+    print(f"\n{'Algorithm':<20} {'Fidelity':>10} {'Time (s)':>12} {'Reward':>10}")
+    print("-" * 55)
+    print(f"{'Rainbow DQN (Ours)':<20} {rainbow_final_fidelity:>10.4f} {rainbow_final_time:>12.1f} {rainbow_final_reward:>10.4f}")
+    print(f"{'PPO':<20} {ppo_final_fidelity:>10.4f} {ppo_final_time:>12.1f} {ppo_final_reward:>10.4f}")
+    print(f"{'Standard DQN':<20} {dqn_final_fidelity:>10.4f} {dqn_final_time:>12.1f} {dqn_final_reward:>10.4f}")
+    
+    # Save comparison
+    comparison_df = pd.DataFrame([
+        {'Algorithm': 'RainbowDQN', 'Fidelity': rainbow_final_fidelity, 'Time': rainbow_final_time, 'Reward': rainbow_final_reward},
+        {'Algorithm': 'PPO', 'Fidelity': ppo_final_fidelity, 'Time': ppo_final_time, 'Reward': ppo_final_reward},
+        {'Algorithm': 'StandardDQN', 'Fidelity': dqn_final_fidelity, 'Time': dqn_final_time, 'Reward': dqn_final_reward}
+    ])
+    comparison_df.to_csv(os.path.join(output_dir, "drl_comparison.csv"), index=False)
+    
     # ========== EXPERIMENT 3: Multi-Objective Comparison ==========
     print("\n" + "=" * 60)
     print("EXPERIMENT 3: Multi-Objective Scalarization Comparison")
     print("=" * 60)
     
-    scalarization_methods = {
-        'WeightedSum': ScalarizationMethod.WEIGHTED_SUM,
-        'Chebyshev': ScalarizationMethod.CHEBYSHEV,
-        'ConstraintBased': ScalarizationMethod.CONSTRAINT_BASED
-    }
+    # FIXED: Train SEPARATE agents for each objective configuration
+    # This properly demonstrates the multi-objective tradeoffs
+    
+    mo_training_configs = [
+        {
+            'name': 'TimeFocused',
+            'weights': (0.60, 0.25, 0.15),
+            'scalarization': ScalarizationMethod.WEIGHTED_SUM,
+        },
+        {
+            'name': 'FidelityFocused',
+            'weights': (0.20, 0.65, 0.15),
+            'scalarization': ScalarizationMethod.WEIGHTED_SUM,
+        },
+        {
+            'name': 'Balanced',
+            'weights': (0.35, 0.45, 0.20),
+            'scalarization': ScalarizationMethod.WEIGHTED_SUM,
+        },
+        {
+            'name': 'Chebyshev',
+            'weights': (0.33, 0.34, 0.33),
+            'scalarization': ScalarizationMethod.CHEBYSHEV,
+        },
+        {
+            'name': 'ConstraintBased',
+            'weights': (0.40, 0.45, 0.15),
+            'scalarization': ScalarizationMethod.CONSTRAINT_BASED,
+        },
+    ]
     
     mo_results = []
+    mo_training_histories = {}
     
-    for name, method in scalarization_methods.items():
-        print(f"\nTraining with {name} scalarization...")
+    for mo_cfg in mo_training_configs:
+        print(f"\n--- Training {mo_cfg['name']} Agent ---")
+        print(f"    Weights: time={mo_cfg['weights'][0]}, fidelity={mo_cfg['weights'][1]}, energy={mo_cfg['weights'][2]}")
         
+        # Create environment with THIS objective configuration
         mo_config = MultiObjectiveConfig(
-            weight_time=0.4,
-            weight_fidelity=0.4,
-            weight_energy=0.2,
-            scalarization=method,
-            min_fidelity_threshold=0.7
+            weight_time=mo_cfg['weights'][0],
+            weight_fidelity=mo_cfg['weights'][1],
+            weight_energy=mo_cfg['weights'][2],
+            scalarization=mo_cfg['scalarization'],
+            min_fidelity_threshold=0.10
         )
         
         env_mo = FedMOEnv(
@@ -403,9 +615,10 @@ def run_experiments(config: ExperimentConfig):
             n_qnodes=config.n_qnodes,
             n_qtasks_per_episode=config.n_qtasks_per_episode,
             mo_config=mo_config,
-            seed=config.seed + 1
+            seed=config.seed + hash(mo_cfg['name']) % 1000
         )
         
+        # Train a NEW agent for THIS configuration
         agent_mo = RainbowDQNAgent(
             state_dim=env_mo.observation_space.shape[0],
             action_dim=config.n_qnodes,
@@ -413,22 +626,59 @@ def run_experiments(config: ExperimentConfig):
             device=DEVICE
         )
         
-        history, _ = run_drl_training(
-            env_mo, agent_mo, config.n_episodes // 2, # Shorter run for MO comparison
-            eval_interval=20, verbose=False
+        # Full training
+        history, trained_agent = run_drl_training(
+            env_mo, agent_mo,
+            n_episodes=config.n_episodes,
+            eval_interval=100,
+            verbose=False
         )
         
-        for h in history:
-            h['scalarization'] = name
-            mo_results.append(h)
-            
-        mean_fidelity = np.mean([h.get('mean_fidelity', 0) for h in history[-20:]]) if history else 0
-        mean_time = np.mean([h.get('mean_completion_time', 0) for h in history[-20:]]) if history else 0
-        print(f"  Final Mean Fidelity: {mean_fidelity:.4f}")
-        print(f"  Final Mean Completion Time: {mean_time:.2f}s")
+        mo_training_histories[mo_cfg['name']] = history
         
+        # Compute final metrics (average of last 100 episodes)
+        final_fidelity = np.mean([h.get('mean_fidelity', 0) for h in history[-100:]])
+        final_time = np.mean([h.get('mean_completion_time', 0) for h in history[-100:]])
+        final_energy = np.mean([h.get('total_energy', 0) for h in history[-100:]])
+        final_reward = np.mean([h.get('mean_reward', 0) for h in history[-100:]])
+        
+        print(f"    Results: Fidelity={final_fidelity:.4f}, Time={final_time:.1f}s, Reward={final_reward:.4f}")
+        
+        # Record for each episode (for learning curves)
+        for ep, h in enumerate(history):
+            mo_results.append({
+                'episode': ep,
+                'config_name': mo_cfg['name'],
+                'scalarization': mo_cfg['scalarization'].value,
+                'weight_time': mo_cfg['weights'][0],
+                'weight_fidelity': mo_cfg['weights'][1],
+                'weight_energy': mo_cfg['weights'][2],
+                'mean_fidelity': h.get('mean_fidelity', 0),
+                'mean_completion_time': h.get('mean_completion_time', 0),
+                'total_energy': h.get('total_energy', 0),
+                'mean_reward': h.get('mean_reward', 0)
+            })
+    
+    # Save detailed results
     mo_df = pd.DataFrame(mo_results)
     mo_df.to_csv(os.path.join(output_dir, "multi_objective_results.csv"), index=False)
+    
+    # Generate summary table
+    print("\n--- Multi-Objective Summary ---")
+    summary_data = []
+    for mo_cfg in mo_training_configs:
+        cfg_data = mo_df[mo_df['config_name'] == mo_cfg['name']]
+        final_data = cfg_data.tail(100)  # Last 100 episodes
+        summary_data.append({
+            'Configuration': mo_cfg['name'],
+            'Fidelity': f"{final_data['mean_fidelity'].mean():.4f}",
+            'Time': f"{final_data['mean_completion_time'].mean():.1f}",
+            'Reward': f"{final_data['mean_reward'].mean():.4f}"
+        })
+    
+    summary_df = pd.DataFrame(summary_data)
+    print(summary_df.to_string(index=False))
+    summary_df.to_csv(os.path.join(output_dir, "multi_objective_summary.csv"), index=False)
 
     # ========== EXPERIMENT 4: Ablation Study ==========
     print("\n" + "=" * 60)
@@ -473,13 +723,51 @@ def run_experiments(config: ExperimentConfig):
     print("EXPERIMENT 5: Federated Learning Comparison")
     print("=" * 60)
     
+    # PATCH 4: First train centralized baseline (same compute budget)
+    print("\n--- Centralized Training (Baseline) ---")
+    
+    total_federated_episodes = config.federated_rounds * config.local_steps
+    
+    centralized_env = FedMOEnv(
+        dataset_path=config.dataset_path,
+        n_qnodes=config.n_qnodes,
+        n_qtasks_per_episode=config.n_qtasks_per_episode,
+        seed=config.seed
+    )
+    
+    centralized_agent = RainbowDQNAgent(
+        state_dim=centralized_env.observation_space.shape[0],
+        action_dim=config.n_qnodes,
+        config=rainbow_config,
+        device=DEVICE
+    )
+    
+    centralized_history, _ = run_drl_training(
+        centralized_env, centralized_agent,
+        n_episodes=total_federated_episodes,
+        eval_interval=50,
+        verbose=False
+    )
+    
+    centralized_final = {
+        'method': 'Centralized',
+        'fed_round': -1,
+        'mean_fidelity': np.mean([h.get('mean_fidelity', 0) for h in centralized_history[-20:]]),
+        'mean_completion_time': np.mean([h.get('mean_completion_time', 0) for h in centralized_history[-20:]]),
+        'communication_cost': 0,
+        'privacy': 'None'
+    }
+    
+    print(f"Centralized: Fidelity={centralized_final['mean_fidelity']:.4f}, "
+          f"Time={centralized_final['mean_completion_time']:.1f}s")
+    
     fed_configs = {
         'FedAvg': AggregationMethod.FEDAVG,
         'FedProx': AggregationMethod.FEDPROX,
         'FedNova': AggregationMethod.FEDNOVA
     }
     
-    fed_results = []
+    fed_results = [centralized_final]  # Start with centralized baseline
     
     for name, method in fed_configs.items():
         print(f"\nTraining with {name}...")
@@ -488,7 +776,7 @@ def run_experiments(config: ExperimentConfig):
             aggregation=method,
             local_steps=config.local_steps,
             num_rounds=config.federated_rounds,
-            fedprox_mu=0.01
+            fedprox_mu=0.1  # RESEARCH: Increased for non-IID quantum workloads
         )
         
         aggregator = FederatedAggregator(
@@ -546,7 +834,8 @@ def run_experiments(config: ExperimentConfig):
                     step_count = 0
                     max_steps = 200  # Prevent infinite loops
                     while not done and step_count < max_steps:
-                        action = agent.select_action(obs, training=True)
+                        action_mask = env.get_action_mask() if hasattr(env, 'get_action_mask') else None
+                        action = agent.select_action(obs, training=True, action_mask=action_mask)
                         next_obs, reward, done, truncated, info = env.step(action)
                         agent.store_transition(obs, action, reward, next_obs, done)
                         agent.update()
@@ -581,7 +870,8 @@ def run_experiments(config: ExperimentConfig):
             eval_steps = 0
             max_eval_steps = 200  # Prevent infinite loops
             while not done and eval_steps < max_eval_steps:
-                action = eval_agent.select_action(obs, training=False)
+                action_mask = envs[0].get_action_mask() if hasattr(envs[0], 'get_action_mask') else None
+                action = eval_agent.select_action(obs, training=False, action_mask=action_mask)
                 obs, _, done, truncated, _ = envs[0].step(action)
                 eval_steps += 1
                 if truncated: done = True
@@ -658,7 +948,7 @@ if __name__ == "__main__":
             dataset_path=dataset_file,
             n_qnodes=5,
             n_qtasks_per_episode=25,
-            n_episodes=100,
+            n_episodes=500,  # Increased for Rainbow DQN convergence
             n_eval_episodes=20,
             n_datacenters=3,
             federated_rounds=10,

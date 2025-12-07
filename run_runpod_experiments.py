@@ -59,29 +59,29 @@ PHASES = {
     "main": PhaseConfig(
         name="main",
         pattern="qsimpy/qdataset/qsimpyds_1000_sub_*.csv",
-        n_episodes=200,
+        n_episodes=50000,  # Q1 JOURNAL: Increased from 10k for proper convergence
         n_eval_episodes=50,
-        federated_rounds=20,
-        local_steps=10,
-        description="Main experiments - 1000 circuits (~6-8 hrs)"
+        federated_rounds=50,  # Q1 JOURNAL: Increased from 20
+        local_steps=20,  # Q1 JOURNAL: Increased from 10
+        description="Main experiments - 1000 circuits (~24-36 hrs)"
     ),
     "scalability": PhaseConfig(
         name="scalability",
         pattern="qsimpy/qdataset/qsimpyds_1900_sub_*.csv",
-        n_episodes=200,
+        n_episodes=50000,  # Q1 JOURNAL: Increased from 10k for proper convergence
         n_eval_episodes=50,
-        federated_rounds=20,
-        local_steps=10,
-        description="Scalability test - 1900 circuits (~1-2 hrs)"
+        federated_rounds=50,  # Q1 JOURNAL: Increased from 20
+        local_steps=20,  # Q1 JOURNAL: Increased from 10
+        description="Scalability test - 1900 circuits (~8-12 hrs)"
     ),
     "small": PhaseConfig(
         name="small",
         pattern="qsimpy/qdataset/qsimpyds_100_sub_*.csv",
-        n_episodes=100,
+        n_episodes=50000,  # Q1 JOURNAL: Increased from 10k for proper convergence
         n_eval_episodes=20,
-        federated_rounds=10,
-        local_steps=5,
-        description="All small datasets (~2-3 hrs)"
+        federated_rounds=50,  # Q1 JOURNAL: Increased from 10
+        local_steps=20,  # Q1 JOURNAL: Increased from 5
+        description="All small datasets (~8-12 hrs)"
     )
 }
 
