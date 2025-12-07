@@ -235,7 +235,7 @@ def run_drl_training(
             
             # GPU OPTIMIZATION: Multiple gradient updates per step
             if len(agent.replay_buffer) >= agent.config.min_buffer_size:
-                for _ in range(4):  # 4 updates per step for better GPU utilization
+                for _ in range(16):  # 16 updates per step - higher GPU utilization
                     agent.update()
             
             obs = next_obs
