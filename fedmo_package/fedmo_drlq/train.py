@@ -364,8 +364,10 @@ def train_federated(
             for _ in range(config.federated.local_steps):
                 obs, _ = env.reset()
                 episode_done = False
+                step_count = 0
+                max_steps = 200  # Prevent infinite loops
                 
-                while not episode_done:
+                while not episode_done and step_count < max_steps:
                     if config.training.algorithm == "ppo":
                         action, log_prob, value = local_agent.select_action(obs)
                     else:
@@ -382,6 +384,7 @@ def train_federated(
                     obs = next_obs
                     local_reward += reward
                     local_steps += 1
+                    step_count += 1
                     
                     # Update with proximal term
                     if config.training.algorithm != "ppo":

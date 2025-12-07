@@ -38,16 +38,21 @@ class FederatedConfig:
     aggregation: AggregationMethod = AggregationMethod.FEDAVG
     
     # Number of local training steps before aggregation
-    local_steps: int = 10
+    local_steps: int = 20  # Was 10 - more local training per round for convergence
     
     # Number of federated rounds
-    num_rounds: int = 100
+    num_rounds: int = 50  # Was 100 - matched to experiment config
     
     # Client participation rate (fraction of clients per round)
     participation_rate: float = 1.0
     
     # FedProx proximal term coefficient (μ)
-    fedprox_mu: float = 0.01
+    fedprox_mu: float = 0.1  # RESEARCH: Increased for non-IID quantum workloads
+    
+    # FedNova configuration - RESEARCH: Fix for erratic results
+    fednova_tau_effective: float = 1.0  # Standardized tau (was: variable)
+    fednova_normalize_gradients: bool = True  # Add gradient normalization
+    fednova_momentum: float = 0.9  # Smooth updates
     
     # Communication settings
     compression_ratio: float = 1.0  # 1.0 = no compression

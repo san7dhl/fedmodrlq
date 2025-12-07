@@ -484,8 +484,10 @@ class Evaluator:
             
             total_reward = 0
             done = False
+            step_count = 0
+            max_steps = 200  # Prevent infinite loops
             
-            while not done:
+            while not done and step_count < max_steps:
                 if hasattr(agent, 'select_action'):
                     action = agent.select_action(obs, training=not deterministic)
                     if isinstance(action, tuple):
@@ -495,6 +497,7 @@ class Evaluator:
                 
                 obs, reward, terminated, truncated, info = env.step(action)
                 total_reward += reward
+                step_count += 1
                 done = terminated or truncated
             
             # Get episode summary
@@ -542,13 +545,16 @@ class Evaluator:
             
             total_reward = 0
             done = False
+            step_count = 0
+            max_steps = 200  # Prevent infinite loops
             
-            while not done:
+            while not done and step_count < max_steps:
                 valid_actions = list(range(env.action_space.n))
                 action = scheduler.select_action(obs, valid_actions)
                 
                 obs, reward, terminated, truncated, info = env.step(action)
                 total_reward += reward
+                step_count += 1
                 done = terminated or truncated
             
             summary = env.get_episode_summary()

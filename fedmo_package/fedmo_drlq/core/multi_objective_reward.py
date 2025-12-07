@@ -50,34 +50,48 @@ class ObjectiveConfig:
 
 @dataclass
 class MultiObjectiveConfig:
-    """Configuration for multi-objective optimization"""
+    """Configuration for multi-objective optimization
+    
+    RESEARCH: Updated thresholds based on actual NISQ fidelity ranges.
+    """
     
     # Weights for objectives (must sum to 1.0)
-    weight_time: float = 0.4
-    weight_fidelity: float = 0.4
-    weight_energy: float = 0.2
+    # UPDATED: Increased fidelity weight to improve DRL learning signal
+    weight_time: float = 0.25
+    weight_fidelity: float = 0.6  # Highest priority for fidelity optimization
+    weight_energy: float = 0.15
     
     # Scalarization method
     scalarization: ScalarizationMethod = ScalarizationMethod.WEIGHTED_SUM
     
     # Constraint thresholds (for constraint-based scalarization)
-    min_fidelity_threshold: float = 0.8
-    max_energy_threshold: float = 100000.0  # Joules
+    # RESEARCH: Fixed based on actual data - mean fidelity is 0.11-0.15
+    min_fidelity_threshold: float = 0.10  # Was 0.8 - unrealistic for NISQ
+    max_time_threshold: float = 30000.0  # Reasonable time constraint
+    max_energy_threshold: float = 2.0e9  # FIXED: Match actual energy range
     
-    # Ideal point for Chebyshev (best achievable values)
-    ideal_time: float = 0.0
-    ideal_fidelity: float = 1.0
-    ideal_energy: float = 0.0
+    # CRITICAL FIX: Ideal/Nadir bounds based on ACTUAL experimental data
+    # Previous bounds caused flat reward landscape (everything clipped to extremes)
+    # Time bounds (seconds) - actual data range: 2,417 - 36,929
+    ideal_time: float = 2000.0      # Best achievable ~2400s
+    nadir_time: float = 40000.0     # Worst observed ~37000s
     
-    # Nadir point (worst values for normalization)
-    nadir_time: float = 1000.0  # seconds
-    nadir_fidelity: float = 0.0
-    nadir_energy: float = 100000.0  # Joules
+    # Fidelity bounds - actual data range: 0.10 - 0.20
+    ideal_fidelity: float = 0.25    # Target for good NISQ scheduling
+    nadir_fidelity: float = 0.05    # Worst acceptable
+    
+    # Energy bounds (Joules) - actual data range: 2.8e8 - 1.6e9
+    ideal_energy: float = 2.0e8     # Best observed ~2.8e8
+    nadir_energy: float = 2.0e9     # Worst observed ~1.6e9
     
     # Reward scaling factors
     time_scale: float = 1.0
-    fidelity_scale: float = 10.0  # Scale up fidelity importance
-    energy_scale: float = 0.1
+    fidelity_scale: float = 1.0  # All objectives on same scale now
+    energy_scale: float = 1.0
+    
+    # Fidelity bonus reward shaping
+    fidelity_bonus_threshold: float = 0.12  # Fidelity threshold for bonus
+    fidelity_bonus_value: float = 0.5  # Bonus reward when threshold exceeded
     
     def validate_weights(self) -> bool:
         """Validate that weights sum to 1.0"""
@@ -117,6 +131,56 @@ class MultiObjectiveReward:
         # History for Pareto analysis
         self.objective_history: List[Dict[str, float]] = []
         self.reward_history: List[float] = []
+    
+    def compute_step_reward(
+        self,
+        is_valid_placement: bool,
+        expected_fidelity: float,
+        node_utilization: float,
+        queue_length: int,
+        max_queue_length: int = 10
+    ) -> float:
+        """
+        Compute immediate step reward for dense reward shaping.
+        
+        This provides intermediate rewards for each scheduling decision,
+        helping the agent learn faster with sparse episode rewards.
+        
+        Args:
+            is_valid_placement: Whether action was a valid node placement
+            expected_fidelity: Estimated fidelity for this task-node pair
+            node_utilization: Current utilization ratio of selected node (0-1)
+            queue_length: Current queue length at selected node
+            max_queue_length: Maximum expected queue length
+            
+        Returns:
+            Immediate step reward (dense feedback)
+        """
+        if not is_valid_placement:
+            return -1.0  # Strong penalty for invalid actions
+        
+        reward = 0.0
+        
+        # 1. Fidelity-aware placement bonus (immediate feedback)
+        # Scale fidelity to meaningful range based on NISQ reality
+        fidelity_normalized = (expected_fidelity - 0.05) / (0.25 - 0.05)  # 0 to 1 range
+        fidelity_normalized = np.clip(fidelity_normalized, 0.0, 1.0)
+        reward += 0.5 * fidelity_normalized
+        
+        # 2. Load balancing reward (sweet spot: 30-80% utilization)
+        if 0.3 < node_utilization < 0.8:
+            reward += 0.1  # Prefer balanced load
+        elif node_utilization > 0.95:
+            reward -= 0.1  # Penalize overloaded nodes
+        
+        # 3. Queue management reward (prefer shorter queues)
+        queue_ratio = queue_length / max_queue_length
+        if queue_ratio < 0.3:
+            reward += 0.05
+        elif queue_ratio > 0.8:
+            reward -= 0.05
+        
+        return reward
         
     def _normalize_weights(self):
         """Normalize weights to sum to 1.0"""
@@ -231,6 +295,10 @@ class MultiObjectiveReward:
             self.config.weight_fidelity * rewards['fidelity'] +
             self.config.weight_energy * rewards['energy']
         )
+        
+        # Apply fidelity bonus reward shaping
+        if fidelity >= self.config.fidelity_bonus_threshold:
+            total_reward += self.config.fidelity_bonus_value
         
         return total_reward
     
@@ -491,11 +559,11 @@ def create_fidelity_focused_reward() -> MultiObjectiveReward:
 
 
 def create_balanced_reward() -> MultiObjectiveReward:
-    """Create reward calculator with balanced objectives"""
+    """Create reward calculator with fidelity-prioritized objectives"""
     config = MultiObjectiveConfig(
-        weight_time=0.4,
-        weight_fidelity=0.4,
-        weight_energy=0.2,
+        weight_time=0.25,
+        weight_fidelity=0.6,  # Prioritize fidelity for DRL learning
+        weight_energy=0.15,
         scalarization=ScalarizationMethod.WEIGHTED_SUM
     )
     return MultiObjectiveReward(config)
@@ -504,9 +572,9 @@ def create_balanced_reward() -> MultiObjectiveReward:
 def create_chebyshev_reward() -> MultiObjectiveReward:
     """Create reward calculator using Chebyshev scalarization"""
     config = MultiObjectiveConfig(
-        weight_time=0.4,
-        weight_fidelity=0.4,
-        weight_energy=0.2,
+        weight_time=0.25,
+        weight_fidelity=0.6,  # Prioritize fidelity
+        weight_energy=0.15,
         scalarization=ScalarizationMethod.CHEBYSHEV
     )
     return MultiObjectiveReward(config)

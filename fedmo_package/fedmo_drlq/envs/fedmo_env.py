@@ -254,12 +254,22 @@ class FedMOEnv(gym.Env):
         subset_id = (self.current_round % self.n_subsets) + 1
         subset_df = self.df[self.df['subset'] == subset_id]
         
-        # Sample tasks
-        n_tasks = min(self.n_qtasks_per_episode, len(subset_df))
-        if n_tasks < self.n_qtasks_per_episode:
+        # Handle empty subset - fall back to entire dataset
+        if len(subset_df) == 0:
+            subset_df = self.df
+        
+        # Handle case where entire dataset might still be empty
+        if len(subset_df) == 0:
+            raise ValueError(f"Dataset is empty, cannot generate tasks")
+        
+        # Sample tasks with replacement if needed
+        n_available = len(subset_df)
+        if n_available < self.n_qtasks_per_episode:
+            # Not enough tasks, sample with replacement
             sampled_df = subset_df.sample(n=self.n_qtasks_per_episode, replace=True, random_state=self._seed)
         else:
-            sampled_df = subset_df.sample(n=n_tasks, random_state=self._seed)
+            # Enough tasks, sample without replacement
+            sampled_df = subset_df.sample(n=self.n_qtasks_per_episode, random_state=self._seed)
         
         # Generate arrival times
         base_time = self.current_round * 60.0
@@ -539,6 +549,28 @@ class FedMOEnv(gym.Env):
             "pareto_front_size": len(self.reward_calculator.get_pareto_front())
         }
     
+    def get_action_mask(self) -> np.ndarray:
+        """
+        Get mask of valid actions for current task.
+        
+        Returns:
+            np.ndarray: Binary mask where 1=valid action, 0=invalid action.
+                       Invalid means task qubits > node capacity.
+        """
+        if self.current_qtask is None:
+            return np.ones(self.n_qnodes, dtype=np.float32)
+        
+        mask = np.array([
+            1.0 if self._can_execute_on_node(self.current_qtask, node) else 0.0
+            for node in self.qnodes
+        ], dtype=np.float32)
+        
+        # Ensure at least one valid action (fallback to highest-capacity node)
+        if mask.sum() == 0:
+            mask[0] = 1.0
+        
+        return mask
+    
     def get_datacenter_id(self) -> int:
         """Get datacenter ID for federated learning"""
         return self.datacenter_id
@@ -611,33 +643,33 @@ def make_fedmo_env(
     """
     configs = {
         "balanced": MultiObjectiveConfig(
-            weight_time=0.4,
-            weight_fidelity=0.4,
-            weight_energy=0.2,
+            weight_time=0.25,
+            weight_fidelity=0.6,  # Prioritize fidelity for DRL learning
+            weight_energy=0.15,
             scalarization=ScalarizationMethod.WEIGHTED_SUM
         ),
         "time_focused": MultiObjectiveConfig(
-            weight_time=0.7,
-            weight_fidelity=0.2,
-            weight_energy=0.1,
+            weight_time=0.5,
+            weight_fidelity=0.35,
+            weight_energy=0.15,
             scalarization=ScalarizationMethod.WEIGHTED_SUM
         ),
         "fidelity_focused": MultiObjectiveConfig(
-            weight_time=0.2,
-            weight_fidelity=0.7,
+            weight_time=0.15,
+            weight_fidelity=0.75,  # Maximum fidelity focus
             weight_energy=0.1,
             scalarization=ScalarizationMethod.WEIGHTED_SUM
         ),
         "chebyshev": MultiObjectiveConfig(
-            weight_time=0.4,
-            weight_fidelity=0.4,
-            weight_energy=0.2,
+            weight_time=0.25,
+            weight_fidelity=0.6,
+            weight_energy=0.15,
             scalarization=ScalarizationMethod.CHEBYSHEV
         ),
         "constraint": MultiObjectiveConfig(
-            weight_time=0.8,
-            weight_fidelity=0.1,
-            weight_energy=0.1,
+            weight_time=0.6,
+            weight_fidelity=0.25,
+            weight_energy=0.15,
             scalarization=ScalarizationMethod.CONSTRAINT_BASED,
             min_fidelity_threshold=0.8
         )

@@ -73,9 +73,10 @@ class MultiObjectiveConfig:
     """Configuration for multi-objective optimization"""
     
     # Default weights for objectives (must sum to 1.0)
-    weight_time: float = 0.4
-    weight_fidelity: float = 0.4
-    weight_energy: float = 0.2
+    # UPDATED: Prioritize fidelity for better DRL learning
+    weight_time: float = 0.25
+    weight_fidelity: float = 0.6  # Highest priority
+    weight_energy: float = 0.15
     
     # Scalarization method
     scalarization: ScalarizationMethod = ScalarizationMethod.WEIGHTED_SUM
@@ -121,7 +122,7 @@ class FederatedConfig:
     participation_rate: float = 1.0
     
     # FedProx proximal term coefficient
-    fedprox_mu: float = 0.01
+    fedprox_mu: float = 0.1  # RESEARCH: Increased for non-IID quantum workloads
     
     # FedNova normalization
     fednova_tau_eff: float = 1.0
@@ -257,17 +258,17 @@ CONFIGS = {
     
     "time_focused": FedMODRLQConfig(
         multi_objective=MultiObjectiveConfig(
-            weight_time=0.7,
-            weight_fidelity=0.2,
-            weight_energy=0.1
+            weight_time=0.5,
+            weight_fidelity=0.35,
+            weight_energy=0.15
         )
     ),
     
     "energy_efficient": FedMODRLQConfig(
         multi_objective=MultiObjectiveConfig(
-            weight_time=0.3,
-            weight_fidelity=0.3,
-            weight_energy=0.4
+            weight_time=0.25,
+            weight_fidelity=0.5,
+            weight_energy=0.25
         )
     ),
     
