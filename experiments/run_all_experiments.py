@@ -493,15 +493,18 @@ def run_experiments(config: ExperimentConfig):
     print("EXPERIMENT 2c: Standard DQN Baseline Training")
     print("=" * 60)
     
-    # Standard DQN: Rainbow with all extensions DISABLED
+    # Standard DQN: Rainbow with all extensions DISABLED (for fair comparison)
     standard_dqn_config = RainbowConfig(
+        hidden_dim=128,           # FAST: Match Rainbow config
         lr=0.001,
         gamma=0.99,
-        batch_size=64,
-        buffer_size=50000,
-        min_buffer_size=500,
+        batch_size=256,           # GPU: Larger batches
+        buffer_size=100000,       # GPU: Large buffer
+        min_buffer_size=2000,     # FAST: Start learning earlier
         target_update_freq=500,
-        use_double_dqn=True,  # Keep only Double DQN
+        use_soft_update=True,     # FAST: Soft updates
+        tau=0.005,
+        use_double_dqn=True,      # Keep only Double DQN
         use_prioritized_replay=False,
         use_dueling=False,
         use_multistep=False,
@@ -510,7 +513,7 @@ def run_experiments(config: ExperimentConfig):
         use_hybrid_exploration=False,
         epsilon_start=1.0,
         epsilon_end=0.01,
-        epsilon_decay=100000
+        epsilon_decay=30000       # FAST: Was 100000
     )
     
     env_dqn = FedMOEnv(
@@ -531,7 +534,7 @@ def run_experiments(config: ExperimentConfig):
     print("\nTraining Standard DQN baseline...")
     dqn_history, _ = run_drl_training(
         env_dqn, dqn_agent, config.n_episodes,
-        eval_interval=1000, verbose=False
+        eval_interval=500, verbose=True  # FIXED: Enable progress output
     )
     
     dqn_df = pd.DataFrame(dqn_history)
